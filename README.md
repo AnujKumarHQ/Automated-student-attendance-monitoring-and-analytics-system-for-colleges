@@ -1,4 +1,4 @@
-# Automated Student Attendance Monitoring and Analytics System
+<img width="1912" height="940" alt="9" src="https://github.com/user-attachments/assets/ba872248-9d04-4854-bdc0-4b28677d2796" /># Automated Student Attendance Monitoring and Analytics System
 
 An attendance tracking and analytics application built with a Next.js frontend and a FastAPI + SQLAlchemy backend. It includes face-recognition scaffolding, a demo data seeding mechanism, per-student dashboards, teacher/admin interfaces, leave/substitution workflows, and reporting tools.
 
@@ -204,6 +204,19 @@ Contributions are welcome. For large changes, please open an issue describing th
 - Password hashing and secure credential handling
 - Upload validation and secure storage
 - Logging and monitoring
+
+## Code ScreenShots
+
+<img width="1915" height="949" alt="image" src="https://github.com<img width="1896" height="942" alt="2" src="https://github.com/user-attachments/assets/99644964-d2c2-49ec-a1a6-8457d7fd4ea2" />
+<img width="1900" height="944" alt="3" src="https://github.com/user-attachments/assets/6e815316-56a1-468c-a25e-b684572c01d0" />
+<img width="1895" height="944" alt="4" src="https://github.com/user-attachments/assets/1dde0589-e158-4c56-9ba7-f0dab469b6f5" />
+<img width="1896" height="942" alt="5" src="https://github.com/user-attachments/assets/d74bc0b4-dd65-4a8e-8ee4-fbef4bbd1134" />
+/user-attachments/assets/c693f60b-d23d-4998-abbc-2b94be4b730b" />
+<img width="1908" height="941" alt="8" src="https://github.com/user-attachments/assets/96c932ec-78a7-4a53-9086-6e3ce12f9575" /><img width="1907" height="943" alt="7" src="https://github.com/user-attachments/assets/ff12b8ef-93c0-4b32-9457-b82f801b1aac" />
+<img width="1896" height="942" alt="2" src="https://github.com/user-attachments/assets/83a8b030-3040-4540-b5cf-d11273131236" />
+<img width="1907" height="942" alt="6" src="https://github.com/user-attachments/assets/990c2647-9afe-4f71-9457-4af8f4f9c1e2" />
+
+
 
 ## License
 
