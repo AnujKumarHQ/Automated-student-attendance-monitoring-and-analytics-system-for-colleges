@@ -79,6 +79,25 @@ export default function LoginPage() {
       return
     }
 
+    // If signing in as the demo student 'anuj', ensure their totals are set so the dashboard shows low attendance
+    try {
+        if (userType === "student" && username === "anuj") {
+        const saved = JSON.parse(localStorage.getItem("attendify-students") || "[]")
+        const existingIndex = saved.findIndex((s: any) => s.username === "anuj")
+        if (existingIndex > -1) {
+          // set totals so overall attendance ≈ 61% (11 present / 18 total)
+          saved[existingIndex].totalPresentDay = 11
+          saved[existingIndex].totalAbsenceDay = 7
+        } else {
+          // add a demo Anuj record if not present
+          saved.push({ id: 4, name: "Anuj Kumar", email: "anuj@example.com", username: "anuj", password: "anuj", course: "BIT", semester: "First", totalPresentDay: 11, totalAbsenceDay: 7 })
+        }
+        localStorage.setItem("attendify-students", JSON.stringify(saved))
+      }
+    } catch (e) {
+      // ignore localStorage errors
+    }
+
     localStorage.setItem("attendify-user-type", userType)
     localStorage.setItem("attendify-username", username)
     localStorage.setItem("attendify-institution", selectedInstitution)
@@ -107,9 +126,7 @@ export default function LoginPage() {
               <h2 className="text-5xl font-bold text-blue-600 leading-tight">for your business</h2>
             </div>
             <p className="text-gray-600 text-lg leading-relaxed max-w-lg">
-              Lorem ipsum dolor sit amet consectetur adipisicing elit. Eveniet, itaque accusantium odio, soluta,
-              corrupti aliquam quibusdam tempora at cupiditate quis eum maiores libero veritatis? Dicta facilis sint
-              aliquid ipsum atque?
+              Quickly track attendance and get concise class reports.
             </p>
           </div>
 

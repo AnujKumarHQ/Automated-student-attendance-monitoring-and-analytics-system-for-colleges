@@ -379,9 +379,15 @@ export default function Subject() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{subject.name}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{subject.course}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-                          {subject.enrolledStudents?.length || 0} students
-                        </Badge>
+                        {(() => {
+                          const enrolled = getEnrolledStudents(subject.id)
+                          const count = enrolled.length
+                          return (
+                            <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                              {count} student{count !== 1 ? "s" : ""}
+                            </Badge>
+                          )
+                        })()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{subject.teacher}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

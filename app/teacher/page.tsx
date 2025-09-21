@@ -2,7 +2,9 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useData } from "@/lib/data-context"
+import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -25,73 +27,18 @@ import {
   ChevronDown,
 } from "lucide-react"
 
-const initialTeachersData = [
-  {
-    id: 1,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-  {
-    id: 2,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-  {
-    id: 3,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-  {
-    id: 4,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-  {
-    id: 5,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-  {
-    id: 6,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-  {
-    id: 7,
-    name: "Manuj Lama",
-    address: "Dolpa",
-    email: "manuj@gmail.com",
-    username: "@malama",
-    password: "malama",
-  },
-]
 
 export default function Teacher() {
   const [activeNav, setActiveNav] = useState("teacher")
   const [searchTerm, setSearchTerm] = useState("")
   const [isProfileOpen, setIsProfileOpen] = useState(false)
-  const [teachersData, setTeachersData] = useState(initialTeachersData)
+  // data context (consolidated further down)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [editingTeacherId, setEditingTeacherId] = useState<number | null>(null)
+  const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false)
+  const [leaveForm, setLeaveForm] = useState({ teacherId: 0, timetableEntryId: 0, date: "", replacementTeacherId: 0, autoAssign: true })
+  const [leaveError, setLeaveError] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     name: "",
     username: "",
@@ -99,6 +46,22 @@ export default function Teacher() {
     email: "",
     address: "",
   })
+  const { teachers: teachersData, addTeacher, updateTeacher, deleteTeacher, timetable, applyLeave, isTeacherOnLeave, leaveRequests, substitutions, resolveLeave } = useData()
+  const [serverLeaves, setServerLeaves] = useState<any[]>([])
+  // normalize server leave object to frontend shape
+  const normalizeLeave = (l: any) => ({
+    id: l.id,
+    teacherId: l.teacher_id ?? l.teacherId,
+    timetableEntryId: l.timetable_entry_id ?? l.timetableEntryId,
+    date: l.date,
+    replacementTeacherId: l.replacement_teacher_id ?? l.replacementTeacherId ?? null,
+    autoAssigned: Boolean(l.auto_assigned ?? l.autoAssigned),
+    status: l.status ?? "open",
+  })
+  // current logged-in user info (stored on login)
+  const userType = typeof window !== "undefined" ? localStorage.getItem("attendify-user-type") : null
+  const username = typeof window !== "undefined" ? localStorage.getItem("attendify-username") : null
+  const { toast } = useToast()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -109,21 +72,19 @@ export default function Teacher() {
     e.preventDefault()
     if (formData.name && formData.username && formData.password && formData.email && formData.address) {
       if (editingTeacherId) {
-        setTeachersData((prev) =>
-          prev.map((teacher) => (teacher.id === editingTeacherId ? { ...teacher, ...formData } : teacher)),
-        )
+        // update in global context
+        updateTeacher(editingTeacherId, { ...formData })
         setIsEditModalOpen(false)
         setEditingTeacherId(null)
       } else {
-        const newTeacher = {
-          id: Math.max(...teachersData.map((t) => t.id)) + 1,
+        // add to global context (addTeacher will assign id)
+        addTeacher({
           name: formData.name,
           address: formData.address,
           email: formData.email,
           username: formData.username,
           password: formData.password,
-        }
-        setTeachersData((prev) => [...prev, newTeacher])
+        })
         setIsAddModalOpen(false)
       }
       setFormData({ name: "", username: "", password: "", email: "", address: "" })
@@ -141,6 +102,74 @@ export default function Teacher() {
     setEditingTeacherId(null)
   }
 
+  const handleLeaveInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type } = e.target as HTMLInputElement
+    if (type === "checkbox") {
+      setLeaveForm((prev) => ({ ...prev, [name]: (e.target as HTMLInputElement).checked }))
+    } else {
+      setLeaveForm((prev) => ({ ...prev, [name]: value }))
+    }
+  }
+
+  const submitLeave = (e: React.FormEvent) => {
+    e.preventDefault()
+    setLeaveError(null)
+    if (!leaveForm.teacherId || !leaveForm.timetableEntryId || !leaveForm.date) {
+      setLeaveError("Please select teacher, class/time and date")
+      return
+    }
+    // ensure numeric ids (form select values may be strings)
+    const teacherIdNum = Number(leaveForm.teacherId)
+    const timetableIdNum = Number(leaveForm.timetableEntryId)
+    const replacementId = leaveForm.replacementTeacherId ? Number(leaveForm.replacementTeacherId) : null
+
+    // try create on backend first
+    const payload = {
+      teacher_id: teacherIdNum,
+      timetable_entry_id: timetableIdNum,
+      date: leaveForm.date,
+      replacement_teacher_id: replacementId,
+    }
+
+    fetch("/api/leaves/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        // add to local DataContext as well for immediate UI updates
+        try {
+          applyLeave(teacherIdNum, timetableIdNum, leaveForm.date, replacementId)
+        } catch (e) {
+          // fallback
+        }
+        // add server copy to visible serverLeaves (normalize shape)
+        try {
+          setServerLeaves((prev) => [...prev, normalizeLeave(data)])
+        } catch (e) {}
+        setIsLeaveModalOpen(false)
+        try {
+          toast({ title: "Leave requested", description: "Your leave request has been submitted." })
+        } catch (e) {}
+      })
+      .catch((err) => {
+        // fallback to local-only behaviour
+        const newId = applyLeave(teacherIdNum, timetableIdNum, leaveForm.date, replacementId)
+        if (!newId) {
+          setLeaveError("Failed to create leave request")
+          try {
+            toast({ title: "Failed", description: "Could not create leave request.", variant: "destructive" })
+          } catch (e) {}
+        } else {
+          setIsLeaveModalOpen(false)
+          try {
+            toast({ title: "Leave saved offline", description: "Leave request saved locally (offline mode)." })
+          } catch (e) {}
+        }
+      })
+  }
+
   const handleEdit = (teacher: any) => {
     setFormData({
       name: teacher.name,
@@ -154,14 +183,32 @@ export default function Teacher() {
   }
 
   const handleDelete = (teacherId: number) => {
+    // Only admins can delete teachers
+    if (userType !== "admin") {
+      alert("Only admins can delete teachers.")
+      return
+    }
     if (window.confirm("Are you sure you want to delete this teacher?")) {
-      setTeachersData((prev) => prev.filter((teacher) => teacher.id !== teacherId))
+      // delete from global context
+      deleteTeacher(teacherId)
     }
   }
 
   const handleLogout = () => {
     window.location.href = "/"
   }
+
+  // load leaves from server when admin views the page
+  useEffect(() => {
+    if (typeof window !== "undefined" && localStorage.getItem("attendify-user-type") === "admin") {
+      fetch("/api/leaves/")
+        .then((r) => r.json())
+        .then((data) => {
+          if (Array.isArray(data)) setServerLeaves(data.map(normalizeLeave))
+        })
+        .catch(() => {})
+    }
+  }, [])
 
   const sidebarItems = [
     { id: "dashboard", label: "Dashboard", icon: BarChart3, href: "/dashboard" },
@@ -184,12 +231,27 @@ export default function Teacher() {
     }
   }
 
-  const filteredTeachers = teachersData.filter(
-    (teacher) =>
-      teacher.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      teacher.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      teacher.address.toLowerCase().includes(searchTerm.toLowerCase()),
-  )
+  // If the logged-in user is a teacher, restrict the view to their own record only.
+  const visibleTeachers = (() => {
+    if (typeof window !== "undefined" && localStorage.getItem("attendify-user-type") === "teacher") {
+      const me = localStorage.getItem("attendify-username")
+      if (!me) return []
+      return teachersData
+        .filter((t) => t.username === me)
+        .filter((teacher) =>
+          teacher.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          teacher.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (teacher.address || "").toLowerCase().includes(searchTerm.toLowerCase()),
+        )
+    }
+    // Admins and others can see the full list filtered by search
+    return teachersData.filter(
+      (teacher) =>
+        teacher.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        teacher.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (teacher.address || "").toLowerCase().includes(searchTerm.toLowerCase()),
+    )
+  })()
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -199,6 +261,7 @@ export default function Teacher() {
         </div>
 
         <nav className="px-4 space-y-1">
+
           <div className="mb-6">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">ANALYSE</p>
             {sidebarItems.map((item) => {
@@ -307,9 +370,14 @@ export default function Teacher() {
                   ))}
               </div>
             </div>
-            <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => setIsAddModalOpen(true)}>
-              Add Teacher
-            </Button>
+            <div className="flex items-center space-x-2">
+              <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => setIsAddModalOpen(true)}>
+                Add Teacher
+              </Button>
+              <Button className="bg-yellow-400 hover:bg-yellow-500 text-black" onClick={() => setIsLeaveModalOpen(true)}>
+                Apply for Leave
+              </Button>
+            </div>
           </div>
 
           <Card className="bg-white">
@@ -338,37 +406,57 @@ export default function Teacher() {
                       <th className="text-left py-3 px-4 font-medium text-gray-700">Email</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-700">Username</th>
                       <th className="text-left py-3 px-4 font-medium text-gray-700">Password</th>
-                      <th className="text-left py-3 px-4 font-medium text-gray-700">Action</th>
+                          <th className="text-left py-3 px-4 font-medium text-gray-700">Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTeachers.map((teacher, index) => (
-                      <tr key={teacher.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    {visibleTeachers.map((teacher, index) => (
+                      <tr
+                        key={teacher.id}
+                        className={`border-b border-gray-100 hover:bg-gray-50 ${
+                          isTeacherOnLeave(teacher.id) ? "bg-yellow-50" : ""
+                        }`}
+                      >
                         <td className="py-3 px-4 text-gray-600">{index + 1}</td>
-                        <td className="py-3 px-4 text-gray-900">{teacher.name}</td>
-                        <td className="py-3 px-4 text-gray-600">{teacher.address}</td>
+                          <td className="py-3 px-4 text-gray-900">{teacher.name}</td>
+                        <td className="py-3 px-4 text-gray-600">{teacher.address || ""}</td>
                         <td className="py-3 px-4 text-gray-600">{teacher.email}</td>
                         <td className="py-3 px-4 text-gray-600">{teacher.username}</td>
                         <td className="py-3 px-4 text-gray-600">{teacher.password}</td>
                         <td className="py-3 px-4">
-                          <div className="flex items-center space-x-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0 hover:bg-blue-50"
-                              onClick={() => handleEdit(teacher)}
-                            >
-                              <Edit className="h-4 w-4 text-blue-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0 hover:bg-red-50"
-                              onClick={() => handleDelete(teacher.id)}
-                            >
-                              <Trash2 className="h-4 w-4 text-red-600" />
-                            </Button>
-                          </div>
+                          {userType === "admin" ? (
+                            <div className="flex items-center space-x-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 hover:bg-blue-50"
+                                onClick={() => handleEdit(teacher)}
+                              >
+                                <Edit className="h-4 w-4 text-blue-600" />
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 hover:bg-red-50"
+                                onClick={() => handleDelete(teacher.id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-red-600" />
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 hover:bg-yellow-50"
+                                onClick={() => {
+                                  setLeaveForm({ teacherId: teacher.id, timetableEntryId: timetable[0]?.id || 0, date: new Date().toISOString().split("T")[0], replacementTeacherId: 0, autoAssign: true })
+                                  setIsLeaveModalOpen(true)
+                                }}
+                              >
+                                <Badge className="text-xs">Leave</Badge>
+                              </Button>
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -377,6 +465,119 @@ export default function Teacher() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Leave Requests Panel */}
+          <div className="mt-6">
+            <Card className="bg-white">
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg font-semibold text-gray-900">Leave Requests</CardTitle>
+                  <span className="text-sm text-gray-500">Open requests</span>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {leaveRequests.filter((l) => l.status === "open").length === 0 ? (
+                  <div className="text-sm text-gray-500">No open leave requests</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-200">
+                          <th className="text-left py-3 px-4 text-sm text-gray-600">#</th>
+                          <th className="text-left py-3 px-4 text-sm text-gray-600">Teacher</th>
+                          <th className="text-left py-3 px-4 text-sm text-gray-600">Class / Time</th>
+                          <th className="text-left py-3 px-4 text-sm text-gray-600">Date</th>
+                          <th className="text-left py-3 px-4 text-sm text-gray-600">Replacement</th>
+                          <th className="text-left py-3 px-4 text-sm text-gray-600">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {leaveRequests
+                          .filter((l) => l.status === "open")
+                          .map((lr, idx) => {
+                            const teacher = teachersData.find((t) => t.id === lr.teacherId)
+                            const tt = timetable.find((t) => t.id === lr.timetableEntryId)
+                            return (
+                              <tr key={lr.id} className="border-b border-gray-100">
+                                <td className="py-3 px-4 text-gray-600">{idx + 1}</td>
+                                <td className="py-3 px-4 text-gray-800">{teacher?.name || "-"}</td>
+                                <td className="py-3 px-4 text-gray-600">{tt ? `${tt.day} ${tt.timeSlot}` : "-"}</td>
+                                <td className="py-3 px-4 text-gray-600">{lr.date}</td>
+                                <td className="py-3 px-4 text-gray-600">{lr.replacementTeacherId ? teachersData.find((t) => t.id === lr.replacementTeacherId)?.name : "Auto"}</td>
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center space-x-2">
+                                    {/* Auto-assign only available to admins */}
+                                    {userType === "admin" && (
+                                      <Button
+                                        size="sm"
+                                        onClick={() => {
+                                          resolveLeave(lr.id, null)
+                                        }}
+                                        className="bg-green-600 hover:bg-green-700 text-white"
+                                      >
+                                        Auto-assign
+                                      </Button>
+                                    )}
+
+                                    {/* Resolve allowed for admin or the teacher who created the request */}
+                                    {(userType === "admin" || username === teachersData.find((t) => t.id === lr.teacherId)?.username) && (
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          onClick={() => {
+                                            // optimistic UI: call backend then update local context
+                                            fetch(`/api/leaves/${lr.id}/resolve`, {
+                                              method: "PUT",
+                                              headers: { "Content-Type": "application/json" },
+                                            })
+                                              .then((r) => r.json())
+                                              .then((updated) => {
+                                                // update serverLeaves
+                                                setServerLeaves((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+                                              })
+                                              .catch(() => {
+                                                // fallback: mark resolved locally
+                                                try {
+                                                  resolveLeave(lr.id, lr.replacementTeacherId || null)
+                                                } catch (e) {}
+                                              })
+                                          }}
+                                          className="bg-green-600 hover:bg-green-700 text-white"
+                                        >
+                                          Resolve
+                                        </Button>
+
+                                        <Button
+                                          size="sm"
+                                          onClick={() => {
+                                            fetch(`/api/leaves/${lr.id}/reject`, { method: "PUT" })
+                                              .then((r) => r.json())
+                                              .then((updated) => {
+                                                setServerLeaves((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+                                              })
+                                              .catch(() => {
+                                                // fallback: update local leaveRequests to rejected
+                                                setLeaveForm((f) => f)
+                                              })
+                                          }}
+                                          variant="ghost"
+                                        >
+                                          Reject
+                                        </Button>
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </main>
       </div>
 
@@ -402,54 +603,12 @@ export default function Teacher() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Full name</label>
               <Input
                 name="name"
-                placeholder="Name"
+                placeholder="Full name"
                 value={formData.name}
                 onChange={handleInputChange}
                 className="w-full"
                 required
               />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                <Input
-                  name="username"
-                  placeholder="Username"
-                  value={formData.username}
-                  onChange={handleInputChange}
-                  className="w-full"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <Input
-                  name="password"
-                  type="password"
-                  placeholder="Password"
-                  value={formData.password}
-                  onChange={handleInputChange}
-                  className="w-full"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <Input
-                name="email"
-                type="email"
-                placeholder="sam@gmail.com"
-                value={formData.email}
-                onChange={handleInputChange}
-                className="w-full"
-                required
-              />
-            </div>
-
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
               <Input
                 name="address"
@@ -469,6 +628,83 @@ export default function Teacher() {
                 Reset
               </Button>
               <Button type="button" variant="outline" onClick={handleCancel}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isLeaveModalOpen} onOpenChange={(open) => setIsLeaveModalOpen(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold text-gray-900">Apply for Leave</DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={submitLeave} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Teacher</label>
+              <select
+                name="teacherId"
+                value={leaveForm.teacherId}
+                onChange={handleLeaveInputChange}
+                className="w-full border rounded p-2"
+              >
+                <option value={0}>Select teacher</option>
+                {teachersData.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Class / Time</label>
+              <select
+                name="timetableEntryId"
+                value={leaveForm.timetableEntryId}
+                onChange={handleLeaveInputChange}
+                className="w-full border rounded p-2"
+              >
+                <option value={0}>Select class/time</option>
+                {timetable.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.day} - {t.timeSlot}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+              <Input name="date" type="date" value={leaveForm.date} onChange={handleLeaveInputChange} className="w-full" />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Replacement (optional)</label>
+              <select
+                name="replacementTeacherId"
+                value={leaveForm.replacementTeacherId}
+                onChange={handleLeaveInputChange}
+                className="w-full border rounded p-2"
+              >
+                <option value={0}>Auto-assign</option>
+                {teachersData.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {leaveError && <div className="text-sm text-red-600">{leaveError}</div>}
+
+            <div className="flex space-x-3 pt-4">
+              <Button type="submit" className="bg-yellow-400 hover:bg-yellow-500 text-black">
+                Apply
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setIsLeaveModalOpen(false)}>
                 Cancel
               </Button>
             </div>

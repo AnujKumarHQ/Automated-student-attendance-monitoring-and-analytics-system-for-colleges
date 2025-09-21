@@ -9,7 +9,8 @@ export interface Teacher {
   email: string
   username: string
   password: string
-  subject: string
+  subject?: string
+  address?: string
 }
 
 export interface Student {
@@ -54,12 +55,32 @@ export interface AttendanceRecord {
   timetableEntryId: number
 }
 
+export interface LeaveRequest {
+  id: number
+  teacherId: number
+  timetableEntryId: number
+  date: string // ISO yyyy-mm-dd
+  replacementTeacherId: number | null
+  autoAssigned: boolean
+  status: "open" | "resolved"
+}
+
+export interface Substitution {
+  id: number
+  timetableEntryId: number
+  date: string // ISO
+  replacementTeacherId: number
+  originalTeacherId: number
+}
+
 interface DataContextType {
   teachers: Teacher[]
   students: Student[]
   subjects: Subject[]
   timetable: TimetableEntry[]
   attendance: AttendanceRecord[]
+  leaveRequests: LeaveRequest[]
+  substitutions: Substitution[]
   addTeacher: (teacher: Omit<Teacher, "id">) => void
   updateTeacher: (id: number, teacher: Partial<Teacher>) => void
   deleteTeacher: (id: number) => void
@@ -78,6 +99,22 @@ interface DataContextType {
   unenrollStudentFromSubject: (studentId: number, subjectId: number) => void
   getEnrolledStudents: (subjectId: number) => Student[]
   getStudentSubjects: (studentId: number) => Subject[]
+  getAttendanceCountsForStudentInSubject: (studentId: number, subjectId: number) => {
+    presentCount: number
+    totalClasses: number
+  }
+  seedAttendance: (days?: number) => void
+  seedPatternedAttendance: (days?: number) => void
+  applyLeave: (
+    teacherId: number,
+    timetableEntryId: number,
+    date: string,
+    replacementTeacherId?: number | null,
+  ) => number | null
+  isTeacherOnLeave: (teacherId: number, date?: string) => boolean
+  resolveLeave: (leaveRequestId: number, replacementTeacherId?: number | null) => boolean
+  addSubstitution: (timetableEntryId: number, date: string, replacementTeacherId: number, originalTeacherId: number) => number
+  getReplacementForEntry: (timetableEntryId: number, date: string) => number | null
   updateStudentFaceData: (studentId: number, faceData: string) => void
   recognizeFace: (capturedFaceData: string, enrolledStudents: Student[]) => Student | null
   getStats: () => {
@@ -98,6 +135,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [timetable, setTimetable] = useState<TimetableEntry[]>([])
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([])
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([])
+  const [substitutions, setSubstitutions] = useState<Substitution[]>([])
 
   useEffect(() => {
     const initializeData = () => {
@@ -135,48 +174,118 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem("attendify-teachers", JSON.stringify(defaultTeachers))
       }
 
-      const savedStudents = localStorage.getItem("attendify-students")
-      if (savedStudents) {
-        setStudents(JSON.parse(savedStudents))
-      } else {
-        const defaultStudents = [
-          {
-            id: 1,
-            name: "Manoj Raj",
-            email: "manoj@gmail.com",
-            username: "@manojRaj",
-            password: "manoj",
-            course: "BIT",
-            semester: "First",
-            totalPresentDay: 10,
-            totalAbsenceDay: 2,
-          },
-          {
-            id: 2,
-            name: "mario Dil",
-            email: "mario@gmail.com",
-            username: "@parakas",
-            password: "parakas",
-            course: "BIT",
-            semester: "First",
-            totalPresentDay: 8,
-            totalAbsenceDay: 10,
-          },
-          {
-            id: 3,
-            name: "Kiara Advani",
-            email: "kiara@gmail.com",
-            username: "@kiara",
-            password: "Manag",
-            course: "BIT",
-            semester: "Second",
-            totalPresentDay: 15,
-            totalAbsenceDay: 3,
-          },
-        ]
-        setStudents(defaultStudents)
-        localStorage.setItem("attendify-students", JSON.stringify(defaultStudents))
-      }
+      // Try to load students from backend API first. If backend unavailable, fall back to localStorage/defaults.
+      ;(async () => {
+        const backendBase = "http://127.0.0.1:8000"
+        try {
+          const res = await fetch(`${backendBase}/api/students/`, { cache: "no-store" })
+          if (res.ok) {
+            const data = await res.json()
+            if (Array.isArray(data) && data.length > 0) {
+              // Map backend student shape to frontend Student type where possible
+              const mapped = data.map((s: any, idx: number) => ({
+                id: s.id || idx + 1,
+                name: s.name || s.username || `student-${idx + 1}`,
+                email: s.email || `${s.username || `student${idx + 1}`}@example.com`,
+                username: s.username || `${s.name?.toLowerCase().replace(/\s+/g, "")}`,
+                password: s.password || "",
+                course: s.course || "BIT",
+                semester: s.semester || "First",
+                totalPresentDay: (s.totalPresentDay as number) || undefined,
+                totalAbsenceDay: (s.totalAbsenceDay as number) || undefined,
+              }))
+              setStudents(mapped)
+              localStorage.setItem("attendify-students", JSON.stringify(mapped))
+              return
+            }
+            // If backend returned empty array, attempt to seed demo students then re-fetch
+            if (Array.isArray(data) && data.length === 0) {
+              try {
+                await fetch(`${backendBase}/api/seed-demo-students`, { method: "POST" })
+                const retry = await fetch(`${backendBase}/api/students/`, { cache: "no-store" })
+                if (retry.ok) {
+                  const data2 = await retry.json()
+                  if (Array.isArray(data2) && data2.length > 0) {
+                    const mapped = data2.map((s: any, idx: number) => ({
+                      id: s.id || idx + 1,
+                      name: s.name || s.username || `student-${idx + 1}`,
+                      email: s.email || `${s.username || `student${idx + 1}`}@example.com`,
+                      username: s.username || `${s.name?.toLowerCase().replace(/\s+/g, "")}`,
+                      password: s.password || "",
+                      course: s.course || "BIT",
+                      semester: s.semester || "First",
+                      totalPresentDay: (s.totalPresentDay as number) || undefined,
+                      totalAbsenceDay: (s.totalAbsenceDay as number) || undefined,
+                    }))
+                    setStudents(mapped)
+                    localStorage.setItem("attendify-students", JSON.stringify(mapped))
+                    return
+                  }
+                }
+              } catch (e) {
+                // ignore seed errors and fall back
+              }
+            }
+          }
+        } catch (e) {
+          // backend not reachable — fallback to localStorage/defaults below
+        }
+
+        // Fallback if backend fetch failed or returned nothing
+        const savedStudents = localStorage.getItem("attendify-students")
+        if (savedStudents) {
+          setStudents(JSON.parse(savedStudents))
+        } else {
+          const defaultStudents = [
+            {
+              id: 1,
+              name: "Manoj Raj",
+              email: "manoj@gmail.com",
+              username: "@manojRaj",
+              password: "manoj",
+              course: "BIT",
+              semester: "First",
+              totalPresentDay: 10,
+              totalAbsenceDay: 2,
+            },
+            {
+              id: 4,
+              name: "Anuj Kumar",
+              email: "anuj@example.com",
+              username: "anuj",
+              password: "anuj",
+              course: "BIT",
+              semester: "First",
+              totalPresentDay: 5,
+              totalAbsenceDay: 2,
+            },
+            {
+              id: 2,
+              name: "mario Dil",
+              email: "mario@gmail.com",
+              username: "@parakas",
+              password: "parakas",
+              course: "BIT",
+              semester: "First",
+              totalPresentDay: 8,
+              totalAbsenceDay: 10,
+            },
+            {
+              id: 3,
+              name: "Kiara Advani",
+              email: "kiara@gmail.com",
+              username: "@kiara",
+              password: "Manag",
+              course: "BIT",
+              semester: "Second",
+              totalPresentDay: 15,
+              totalAbsenceDay: 3,
+            },
+          ]
+          setStudents(defaultStudents)
+          localStorage.setItem("attendify-students", JSON.stringify(defaultStudents))
+        }
+      })()
 
       const savedSubjects = localStorage.getItem("attendify-subjects")
       if (savedSubjects) {
@@ -190,7 +299,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             course: "Computer Science",
             teacher: "John Smith",
             teacherId: 1,
-            enrolledStudents: [1, 2],
+            enrolledStudents: [1, 2, 4],
           },
           {
             id: 2,
@@ -199,7 +308,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             course: "Computer Science",
             teacher: "Sarah Johnson",
             teacherId: 2,
-            enrolledStudents: [1, 3],
+            enrolledStudents: [1, 3, 4],
           },
           {
             id: 3,
@@ -208,7 +317,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             course: "Computer Science",
             teacher: "Mike Wilson",
             teacherId: 3,
-            enrolledStudents: [2, 3],
+            enrolledStudents: [2, 3, 4],
           },
           {
             id: 4,
@@ -217,7 +326,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             course: "Computer Science",
             teacher: "John Smith",
             teacherId: 1,
-            enrolledStudents: [1],
+            enrolledStudents: [1, 4],
           },
         ]
         setSubjects(defaultSubjects)
@@ -283,9 +392,96 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       if (savedAttendance) {
         setAttendance(JSON.parse(savedAttendance))
       } else {
-        setAttendance([])
-        localStorage.setItem("attendify-attendance", JSON.stringify([]))
+        // Seed one week of attendance data based on timetable and enrolled students
+        const seededAttendance: AttendanceRecord[] = []
+        const today = new Date()
+        const daysToSeed = 7
+        let nextId = 1
+
+        // Helper to format date
+        const fmt = (d: Date) => d.toISOString().split("T")[0]
+
+        for (let i = 0; i < daysToSeed; i++) {
+          const d = new Date()
+          d.setDate(today.getDate() - i)
+          const dayName = d.toLocaleDateString(undefined, { weekday: "long" })
+          const dateStr = fmt(d)
+
+          const entries = (
+            (JSON.parse(localStorage.getItem("attendify-timetable") || "[]") as TimetableEntry[]) || []
+          ).filter((t) => t.day === dayName)
+
+          entries.forEach((entry) => {
+            const subject = (JSON.parse(localStorage.getItem("attendify-subjects") || "[]") as Subject[]).find(
+              (s) => s.id === entry.subjectId,
+            )
+            const enrolled = subject?.enrolledStudents || []
+            enrolled.forEach((studentId) => {
+              // 80% chance present
+              const isPresent = Math.random() < 0.8
+              seededAttendance.push({
+                id: nextId++,
+                studentId,
+                subjectId: entry.subjectId,
+                date: dateStr,
+                status: isPresent ? "present" : "absent",
+                timetableEntryId: entry.id,
+              })
+            })
+          })
+        }
+
+        // Ensure Anuj (id:4) has deterministic demo attendance: 5 present, 2 absent over last 7 days
+        try {
+          const anujId = 4
+          const subjectsList = (JSON.parse(localStorage.getItem("attendify-subjects") || "[]") as Subject[])
+          if (subjectsList.length > 0) {
+            const fmt = (d: Date) => d.toISOString().split("T")[0]
+            let adate = new Date()
+            // create 7 records: first 5 present, last 2 absent
+            for (let i = 0; i < 7; i++) {
+              const subj = subjectsList[i % subjectsList.length]
+              const isPresent = i < 5
+              seededAttendance.push({
+                id: nextId++,
+                studentId: anujId,
+                subjectId: subj.id,
+                date: fmt(adate),
+                status: isPresent ? "present" : "absent",
+                timetableEntryId: (JSON.parse(localStorage.getItem("attendify-timetable") || "[]") as TimetableEntry[]).find((t) => t.subjectId === subj.id)?.id || 0,
+              })
+              adate.setDate(adate.getDate() - 1)
+            }
+          }
+        } catch (e) {
+          // ignore seeding errors
+        }
+
+        // Update student totals
+        const updatedStudents = (JSON.parse(localStorage.getItem("attendify-students") || "[]") as Student[]).map(
+          (s) => ({ ...s, totalPresentDay: 0, totalAbsenceDay: 0 }),
+        )
+
+        seededAttendance.forEach((rec) => {
+          const st = updatedStudents.find((u) => u.id === rec.studentId)
+          if (st) {
+            if (rec.status === "present") st.totalPresentDay = (st.totalPresentDay || 0) + 1
+            else st.totalAbsenceDay = (st.totalAbsenceDay || 0) + 1
+          }
+        })
+
+        setAttendance(seededAttendance)
+        localStorage.setItem("attendify-attendance", JSON.stringify(seededAttendance))
+        setStudents(updatedStudents)
+        localStorage.setItem("attendify-students", JSON.stringify(updatedStudents))
       }
+      // load leave requests if present
+      const savedLeaves = localStorage.getItem("attendify-leaves")
+      if (savedLeaves) {
+        setLeaveRequests(JSON.parse(savedLeaves))
+      }
+      const savedSubs = localStorage.getItem("attendify-subs")
+      if (savedSubs) setSubstitutions(JSON.parse(savedSubs))
     }
 
     initializeData()
@@ -319,6 +515,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("attendify-attendance", JSON.stringify(attendance))
   }, [attendance])
 
+  useEffect(() => {
+    localStorage.setItem("attendify-leaves", JSON.stringify(leaveRequests))
+  }, [leaveRequests])
+
+  useEffect(() => {
+    localStorage.setItem("attendify-subs", JSON.stringify(substitutions))
+  }, [substitutions])
+
   const addTeacher = (teacher: Omit<Teacher, "id">) => {
     const newId = Math.max(...teachers.map((t) => t.id), 0) + 1
     setTeachers((prev) => [...prev, { ...teacher, id: newId }])
@@ -350,6 +554,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const deleteStudent = (id: number) => {
     setStudents((prev) => prev.filter((student) => student.id !== id))
+    // also remove student from any subject enrollments
+    setSubjects((prev) =>
+      prev.map((subject) => ({
+        ...subject,
+        enrolledStudents: subject.enrolledStudents ? subject.enrolledStudents.filter((sid) => sid !== id) : [],
+      })),
+    )
   }
 
   const addSubject = (subject: Omit<Subject, "id">) => {
@@ -469,6 +680,217 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return subjects.filter((subject) => subject.enrolledStudents?.includes(studentId))
   }
 
+  const seedAttendance = (days = 7) => {
+    // similar to initialization seeding: generate `days` of attendance based on timetable and enrolled students
+    const seededAttendance: AttendanceRecord[] = []
+    const today = new Date()
+    let nextId = Math.max(...attendance.map((a) => a.id), 0) + 1
+
+    // Helper to format date
+    const fmt = (d: Date) => d.toISOString().split("T")[0]
+
+    for (let i = 0; i < days; i++) {
+      const d = new Date()
+      d.setDate(today.getDate() - i)
+      const dayName = d.toLocaleDateString(undefined, { weekday: "long" })
+      const dateStr = fmt(d)
+
+      const entries = timetable.filter((t) => t.day === dayName)
+
+      entries.forEach((entry) => {
+        const subject = subjects.find((s) => s.id === entry.subjectId)
+        const enrolled = subject?.enrolledStudents || []
+        enrolled.forEach((studentId) => {
+          const isPresent = Math.random() < 0.8
+          seededAttendance.push({
+            id: nextId++,
+            studentId,
+            subjectId: entry.subjectId,
+            date: dateStr,
+            status: isPresent ? "present" : "absent",
+            timetableEntryId: entry.id,
+          })
+        })
+      })
+    }
+
+    // Merge with existing attendance (keep old records plus new seeded ones)
+    const merged = [...attendance, ...seededAttendance]
+    setAttendance(merged)
+    localStorage.setItem("attendify-attendance", JSON.stringify(merged))
+
+    // Recompute student totals
+    const updatedStudents = students.map((s) => ({ ...s, totalPresentDay: 0, totalAbsenceDay: 0 }))
+    merged.forEach((rec) => {
+      const st = updatedStudents.find((u) => u.id === rec.studentId)
+      if (st) {
+        if (rec.status === "present") st.totalPresentDay = (st.totalPresentDay || 0) + 1
+        else st.totalAbsenceDay = (st.totalAbsenceDay || 0) + 1
+      }
+    })
+    setStudents(updatedStudents)
+    localStorage.setItem("attendify-students", JSON.stringify(updatedStudents))
+  }
+
+  // Seed attendance with deterministic patterns for demo/analysis (more absences on certain days/subjects/times)
+  const seedPatternedAttendance = (days = 14) => {
+    const seededAttendance: AttendanceRecord[] = []
+    const today = new Date()
+    let nextId = Math.max(...attendance.map((a) => a.id), 0) + 1
+
+    const fmt = (d: Date) => d.toISOString().split("T")[0]
+
+    for (let i = 0; i < days; i++) {
+      const d = new Date()
+      d.setDate(today.getDate() - i)
+      const dayName = d.toLocaleDateString(undefined, { weekday: "long" })
+      const dateStr = fmt(d)
+
+      const entries = timetable.filter((t) => t.day === dayName)
+
+      entries.forEach((entry) => {
+        const subject = subjects.find((s) => s.id === entry.subjectId)
+        const enrolled = subject?.enrolledStudents || []
+
+        enrolled.forEach((studentId) => {
+          // base present probability
+          let presentProb = 0.8
+          // make Mondays tougher (more absences)
+          if (dayName === "Monday") presentProb = 0.5
+          // specific subject more absences (if exists)
+          if (entry.subjectId === 2) presentProb = Math.min(presentProb, 0.4)
+          // certain time-slot (10:00) has more absences
+          if (entry.timeSlot && entry.timeSlot.includes("10:00")) presentProb = Math.min(presentProb, 0.6)
+
+          // also create a few chronically absent students (by id pattern)
+          let isPresent = Math.random() < presentProb
+          if (studentId % 5 === 0) {
+            // every 5th student is more likely to be absent
+            isPresent = Math.random() < (presentProb * 0.4)
+          }
+
+          seededAttendance.push({
+            id: nextId++,
+            studentId,
+            subjectId: entry.subjectId,
+            date: dateStr,
+            status: isPresent ? "present" : "absent",
+            timetableEntryId: entry.id,
+          })
+        })
+      })
+    }
+
+    const merged = [...attendance.filter(a => !seededAttendance.some(s=>s.id===a.id)), ...seededAttendance]
+    setAttendance(merged)
+    localStorage.setItem("attendify-attendance", JSON.stringify(merged))
+
+    // Recompute student totals
+    const updatedStudents = students.map((s) => ({ ...s, totalPresentDay: 0, totalAbsenceDay: 0 }))
+    merged.forEach((rec) => {
+      const st = updatedStudents.find((u) => u.id === rec.studentId)
+      if (st) {
+        if (rec.status === "present") st.totalPresentDay = (st.totalPresentDay || 0) + 1
+        else st.totalAbsenceDay = (st.totalAbsenceDay || 0) + 1
+      }
+    })
+    setStudents(updatedStudents)
+    localStorage.setItem("attendify-students", JSON.stringify(updatedStudents))
+  }
+
+  const applyLeave = (
+    teacherId: number,
+    timetableEntryId: number,
+    date: string,
+    replacementTeacherId: number | null = null,
+  ) => {
+    const newId = Math.max(...leaveRequests.map((l) => l.id), 0) + 1
+    let autoAssigned = false
+    let assignedReplacement = replacementTeacherId
+
+    // If no replacement provided, auto-assign another teacher who teaches same subject or any other available teacher
+    if (!assignedReplacement) {
+      // Find timetable entry to get subject and teacher
+      const entry = timetable.find((t) => t.id === timetableEntryId)
+      // prefer teachers who are not the one on leave
+      const candidates = teachers.filter((t) => t.id !== teacherId)
+      if (candidates.length > 0) {
+        assignedReplacement = candidates[0].id
+        autoAssigned = true
+      } else {
+        assignedReplacement = null
+      }
+    }
+
+    const newRequest: LeaveRequest = {
+      id: newId,
+      teacherId,
+      timetableEntryId,
+      date,
+      replacementTeacherId: assignedReplacement,
+      autoAssigned,
+      status: "open",
+    }
+    setLeaveRequests((prev) => {
+      const updated = [...prev, newRequest]
+      try {
+        localStorage.setItem("attendify-leaves", JSON.stringify(updated))
+      } catch (e) {
+        // ignore localStorage errors
+      }
+      return updated
+    })
+    return newRequest.id
+  }
+
+  const isTeacherOnLeave = (teacherId: number, date?: string) => {
+    if (!date) date = new Date().toISOString().split("T")[0]
+    return leaveRequests.some((lr) => lr.teacherId === teacherId && lr.date === date && lr.status === "open")
+  }
+
+  const addSubstitution = (timetableEntryId: number, date: string, replacementTeacherId: number, originalTeacherId: number) => {
+    const newId = Math.max(...substitutions.map((s) => s.id), 0) + 1
+    const sub: Substitution = { id: newId, timetableEntryId, date, replacementTeacherId, originalTeacherId }
+    setSubstitutions((prev) => [...prev, sub])
+    return newId
+  }
+
+  const getReplacementForEntry = (timetableEntryId: number, date: string) => {
+    const s = substitutions.find((sub) => sub.timetableEntryId === timetableEntryId && sub.date === date)
+    return s ? s.replacementTeacherId : null
+  }
+
+  const resolveLeave = (leaveRequestId: number, replacementTeacherId: number | null = null) => {
+    const lr = leaveRequests.find((l) => l.id === leaveRequestId)
+    if (!lr) return false
+    // determine replacement
+    let assigned = replacementTeacherId
+    if (!assigned) {
+      const candidates = teachers.filter((t) => t.id !== lr.teacherId)
+      assigned = candidates.length > 0 ? candidates[0].id : null
+    }
+    if (assigned) {
+      addSubstitution(lr.timetableEntryId, lr.date, assigned, lr.teacherId)
+    }
+    setLeaveRequests((prev) => prev.map((l) => (l.id === leaveRequestId ? { ...l, replacementTeacherId: assigned, autoAssigned: !replacementTeacherId, status: "resolved" } : l)))
+    return true
+  }
+
+  const getAttendanceCountsForStudentInSubject = (studentId: number, subjectId: number) => {
+    // Count present records for the student in the given subject
+    const presentCount = attendance.filter(
+      (record) => record.studentId === studentId && record.subjectId === subjectId && record.status === "present",
+    ).length
+
+    // Total classes for the subject is the number of distinct dates where attendance was recorded for that subject
+    const dates = Array.from(
+      new Set(attendance.filter((r) => r.subjectId === subjectId).map((r) => r.date)),
+    )
+    const totalClasses = dates.length
+
+    return { presentCount, totalClasses }
+  }
+
   const updateStudentFaceData = (studentId: number, faceData: string) => {
     setStudents((prev) => prev.map((student) => (student.id === studentId ? { ...student, faceData } : student)))
   }
@@ -534,11 +956,21 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         getAttendanceForClass,
         enrollStudentInSubject,
         unenrollStudentFromSubject,
-        getEnrolledStudents,
-        getStudentSubjects,
-        updateStudentFaceData,
-        recognizeFace,
-        getStats,
+  getEnrolledStudents,
+  getStudentSubjects,
+  getAttendanceCountsForStudentInSubject,
+  seedAttendance,
+  seedPatternedAttendance,
+  leaveRequests,
+  substitutions,
+  applyLeave,
+  isTeacherOnLeave,
+  resolveLeave,
+  addSubstitution,
+  getReplacementForEntry,
+  updateStudentFaceData,
+  recognizeFace,
+  getStats,
       }}
     >
       {children}

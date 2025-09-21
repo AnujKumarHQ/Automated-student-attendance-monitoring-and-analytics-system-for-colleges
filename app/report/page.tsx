@@ -55,6 +55,7 @@ export default function ReportPage() {
     markAttendance,
     getAttendanceForClass,
     getEnrolledStudents,
+    getAttendanceCountsForStudentInSubject,
   } = useData()
 
   const [searchTerm, setSearchTerm] = useState("")
@@ -684,57 +685,77 @@ export default function ReportPage() {
                     {isCameraMode ? "Enrolled Students (for reference)" : "Mark Attendance Manually"}
                   </h3>
                   <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
-                    {attendanceModal.classStudents.map((student) => (
-                      <div key={student.id} className="flex items-center justify-between p-3 border rounded-lg">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{student.name}</div>
-                          <div className="text-sm text-gray-600 truncate">{student.email}</div>
-                          <div className="text-xs text-gray-500">
-                            {student.faceData ? "✅ Face data available" : "❌ No face data"}
-                          </div>
-                          <div className="text-xs mt-1">
-                            <Badge
-                              variant={
-                                student.attendanceStatus === "present"
-                                  ? "default"
-                                  : student.attendanceStatus === "absent"
+                    {attendanceModal.classStudents.map((student) => {
+                      const counts = getAttendanceCountsForStudentInSubject(
+                        student.id,
+                        attendanceModal.timetableEntry?.subjectId,
+                      )
+
+                      return (
+                        <div key={student.id} className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">
+                              <span className="text-sm text-gray-500 mr-3">
+                                {counts.presentCount} / {counts.totalClasses}
+                                {counts.totalClasses > 0 && (
+                                  <span className="text-xs text-gray-400 ml-2">({Math.round((counts.presentCount / counts.totalClasses) * 100)}%)</span>
+                                )}
+                              </span>
+                              {student.name}
+                            </div>
+
+                            <div className="text-sm text-gray-600 truncate">{student.email}</div>
+
+                            <div className="text-xs text-gray-500">
+                              {student.faceData ? "✅ Face data available" : "❌ No face data"}
+                            </div>
+
+                            <div className="text-xs mt-1">
+                              <Badge
+                                variant={
+                                  student.attendanceStatus === "present"
+                                    ? "default"
+                                    : student.attendanceStatus === "absent"
                                     ? "destructive"
                                     : "secondary"
-                              }
-                              className="text-xs"
-                            >
-                              {student.attendanceStatus === "present"
-                                ? "Present"
-                                : student.attendanceStatus === "absent"
+                                }
+                                className="text-xs"
+                              >
+                                {student.attendanceStatus === "present"
+                                  ? "Present"
+                                  : student.attendanceStatus === "absent"
                                   ? "Absent"
                                   : "Unmarked"}
-                            </Badge>
+                              </Badge>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 flex-shrink-0 ml-4">
+                            <Button
+                              variant={student.attendanceStatus === "present" ? "default" : "outline"}
+                              size="sm"
+                              onClick={() => handleMarkAttendance(student.id, "present")}
+                              className="flex items-center gap-1"
+                              disabled={isCameraMode}
+                            >
+                              <UserCheck className="w-4 h-4" />
+                              Present
+                            </Button>
+
+                            <Button
+                              variant={student.attendanceStatus === "absent" ? "destructive" : "outline"}
+                              size="sm"
+                              onClick={() => handleMarkAttendance(student.id, "absent")}
+                              className="flex items-center gap-1"
+                              disabled={isCameraMode}
+                            >
+                              <UserX className="w-4 h-4" />
+                              Absent
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex gap-2 flex-shrink-0 ml-4">
-                          <Button
-                            variant={student.attendanceStatus === "present" ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => handleMarkAttendance(student.id, "present")}
-                            className="flex items-center gap-1"
-                            disabled={isCameraMode}
-                          >
-                            <UserCheck className="w-4 h-4" />
-                            Present
-                          </Button>
-                          <Button
-                            variant={student.attendanceStatus === "absent" ? "destructive" : "outline"}
-                            size="sm"
-                            onClick={() => handleMarkAttendance(student.id, "absent")}
-                            className="flex items-center gap-1"
-                            disabled={isCameraMode}
-                          >
-                            <UserX className="w-4 h-4" />
-                            Absent
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               </div>

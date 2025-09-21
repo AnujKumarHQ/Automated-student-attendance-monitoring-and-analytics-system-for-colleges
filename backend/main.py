@@ -5,6 +5,7 @@ import base64
 import numpy as np
 from typing import List
 from datetime import datetime
+from datetime import timedelta
 import cv2
 import insightface
 from insightface.app import FaceAnalysis
@@ -77,6 +78,27 @@ class Attendance(Base):
     confidence = Column(Float, nullable=True)
     student = relationship("Student")
     subject = relationship("Subject")
+
+
+class LeaveRequestModel(Base):
+    __tablename__ = "leave_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("teachers.id"))
+    timetable_entry_id = Column(Integer)
+    date = Column(String(32))  # ISO yyyy-mm-dd
+    replacement_teacher_id = Column(Integer, nullable=True)
+    auto_assigned = Column(Integer, default=0)  # 0/1
+    status = Column(String(32), default="open")  # open/resolved/rejected
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SubstitutionModel(Base):
+    __tablename__ = "substitutions"
+    id = Column(Integer, primary_key=True, index=True)
+    timetable_entry_id = Column(Integer)
+    date = Column(String(32))
+    replacement_teacher_id = Column(Integer)
+    original_teacher_id = Column(Integer)
 
 class FaceEmbedding(Base):
     __tablename__ = "face_embeddings"
@@ -199,9 +221,106 @@ def create_teacher(teacher: TeacherCreate, db: Session = Depends(get_db)):
     db.refresh(new_teacher)
     return new_teacher
 
+
+# Leave request endpoints
+class LeaveCreate(BaseModel):
+    teacher_id: int
+    timetable_entry_id: int
+    date: str
+    replacement_teacher_id: int | None = None
+
+
+@app.post("/api/leaves/")
+def create_leave(req: LeaveCreate, db: Session = Depends(get_db)):
+    # auto-assign if replacement not provided
+    assigned = req.replacement_teacher_id
+    auto_assigned = 0
+    if not assigned:
+        # pick any other teacher
+        cand = db.query(Teacher).filter(Teacher.id != req.teacher_id).first()
+        if cand:
+            assigned = cand.id
+            auto_assigned = 1
+
+    lr = LeaveRequestModel(
+        teacher_id=req.teacher_id,
+        timetable_entry_id=req.timetable_entry_id,
+        date=req.date,
+        replacement_teacher_id=assigned,
+        auto_assigned=auto_assigned,
+        status="open",
+    )
+    db.add(lr)
+    db.commit()
+    db.refresh(lr)
+    return lr
+
+
+@app.get("/api/leaves/")
+def list_leaves(status: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(LeaveRequestModel)
+    if status:
+        q = q.filter(LeaveRequestModel.status == status)
+    return q.all()
+
+
+@app.put("/api/leaves/{leave_id}/resolve")
+def resolve_leave(leave_id: int, replacement_teacher_id: int | None = None, db: Session = Depends(get_db)):
+    lr = db.query(LeaveRequestModel).filter(LeaveRequestModel.id == leave_id).first()
+    if not lr:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+    assigned = replacement_teacher_id or lr.replacement_teacher_id
+    if assigned:
+        sub = SubstitutionModel(timetable_entry_id=lr.timetable_entry_id, date=lr.date, replacement_teacher_id=assigned, original_teacher_id=lr.teacher_id)
+        db.add(sub)
+    lr.replacement_teacher_id = assigned
+    lr.status = "resolved"
+    db.commit()
+    db.refresh(lr)
+    return lr
+
+
+@app.put("/api/leaves/{leave_id}/reject")
+def reject_leave(leave_id: int, db: Session = Depends(get_db)):
+    lr = db.query(LeaveRequestModel).filter(LeaveRequestModel.id == leave_id).first()
+    if not lr:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+    lr.status = "rejected"
+    db.commit()
+    db.refresh(lr)
+    return lr
+
 @app.get("/api/teachers/")
 def get_teachers(db: Session = Depends(get_db)):
     return db.query(Teacher).all()
+
+
+@app.get("/api/students/")
+def get_students(db: Session = Depends(get_db)):
+    """Return all students from the database."""
+    return db.query(Student).all()
+
+
+@app.post("/api/seed-demo-students")
+def seed_demo_students(db: Session = Depends(get_db)):
+    """Create demo student records (if missing): sakshamjain, rohain, anirduh, varun"""
+    demo_names = [
+        ("Saksham Jain", "sakshamjain"),
+        ("Rohain", "rohain"),
+        ("Anirduh", "anirduh"),
+        ("Varun", "varun"),
+    ]
+    created = []
+    for display_name, uname in demo_names:
+        existing = db.query(Student).filter(Student.username == uname).first()
+        if not existing:
+            new_s = Student(name=display_name, email=f"{uname}@example.com", username=uname, password=uname, course="BIT", semester="First")
+            db.add(new_s)
+            db.commit()
+            db.refresh(new_s)
+            created.append({"id": new_s.id, "username": new_s.username, "name": new_s.name})
+
+    return {"created": created, "count": len(created)}
 
 @app.get("/api/teachers/{teacher_id}")
 def get_teacher(teacher_id: int, db: Session = Depends(get_db)):
@@ -275,6 +394,108 @@ def create_attendance(att: AttendanceCreate, db: Session = Depends(get_db)):
 @app.get("/api/attendance/")
 def get_attendance(db: Session = Depends(get_db)):
     return db.query(Attendance).all()
+
+
+@app.post("/api/seed-demo")
+def seed_demo(db: Session = Depends(get_db)):
+    # Simple idempotent seeding: only create records if tables are empty
+    created = {"teachers": 0, "students": 0, "subjects": 0, "attendance": 0}
+
+    if db.query(Teacher).count() == 0:
+        demo_teachers = [
+            Teacher(name="John Smith", email="john@example.com", username="johnsmith", password="pass"),
+            Teacher(name="Sarah Johnson", email="sarah@example.com", username="sarahj", password="pass"),
+            Teacher(name="Mike Wilson", email="mike@example.com", username="mikew", password="pass"),
+        ]
+        db.add_all(demo_teachers)
+        db.commit()
+        created["teachers"] = len(demo_teachers)
+
+    if db.query(Student).count() == 0:
+        demo_students = [
+            Student(name="Manoj Raj", email="manoj@example.com", username="manoj", password="s1", course="BIT", semester="First"),
+            Student(name="Mario Dil", email="mario@example.com", username="mario", password="s2", course="BIT", semester="First"),
+            Student(name="Kiara Advani", email="kiara@example.com", username="kiara", password="s3", course="BIT", semester="Second"),
+            # Add Anuj Kumar demo student for testing low attendance
+            Student(name="Anuj Kumar", email="anuj@example.com", username="anuj", password="anuj", course="BIT", semester="First"),
+        ]
+        db.add_all(demo_students)
+        db.commit()
+        created["students"] = len(demo_students)
+
+    # Ensure specific demo students exist (create if missing)
+    demo_names = [
+        ("Saksham Jain", "sakshamjain"),
+        ("Rohain", "rohain"),
+        ("Anirduh", "anirduh"),
+        ("Varun", "varun"),
+    ]
+    for display_name, uname in demo_names:
+        existing = db.query(Student).filter(Student.username == uname).first()
+        if not existing:
+            new_s = Student(name=display_name, email=f"{uname}@example.com", username=uname, password=uname, course="BIT", semester="First")
+            db.add(new_s)
+            db.commit()
+            created.setdefault("students_added_extra", 0)
+            created["students_added_extra"] += 1
+
+    if db.query(Subject).count() == 0:
+        # pick first two teachers if exist
+        t = db.query(Teacher).limit(3).all()
+        demo_subjects = [
+            Subject(name="Advanced Java", code="CS301", teacher_id=t[0].id if len(t) > 0 else None),
+            Subject(name="Data Structures", code="CS201", teacher_id=t[1].id if len(t) > 1 else None),
+            Subject(name="Database Management", code="CS401", teacher_id=t[2].id if len(t) > 2 else None),
+        ]
+        db.add_all(demo_subjects)
+        db.commit()
+        created["subjects"] = len(demo_subjects)
+
+    # Seed attendance for the last 7 days for each student-subject pair
+    students = db.query(Student).all()
+    subjects = db.query(Subject).all()
+    if students and subjects:
+        today = datetime.utcnow()
+        added = 0
+        for d in range(7):
+            date = (today).strftime("%Y-%m-%d")
+            for s in students:
+                for sub in subjects:
+                    # Random present/absent
+                    import random
+                    status = "present" if random.random() < 0.8 else "absent"
+                    att = Attendance(student_id=s.id, subject_id=sub.id, class_time="09:00-10:00", timestamp=today, status=status, confidence=1.0)
+                    db.add(att)
+                    added += 1
+            # move to previous day (safe fallback)
+            today = today - timedelta(days=1)
+        db.commit()
+        created["attendance"] = added
+
+    # Ensure Anuj has deterministic attendance records: 11 present, 7 absent across the last 18 days for each subject
+    anuj = db.query(Student).filter(Student.username == "anuj").first()
+    if anuj:
+        # remove any old Anuj attendance to avoid duplicates
+        db.query(Attendance).filter(Attendance.student_id == anuj.id).delete()
+        db.commit()
+        # create 7 records per subject: first 5 present, last 2 absent
+        subjects = db.query(Subject).all()
+        if subjects:
+            today = datetime.utcnow()
+            added_anuj = 0
+            # Create 18 days of records: first 11 days present, last 7 days absent
+            for d in range(18):
+                ts = today - timedelta(days=d)
+                status = "present" if d < 11 else "absent"
+                for sub in subjects:
+                    att = Attendance(student_id=anuj.id, subject_id=sub.id, class_time="09:00-10:00", timestamp=ts, status=status, confidence=1.0)
+                    db.add(att)
+                    added_anuj += 1
+            db.commit()
+            created.setdefault("anuj_attendance", 0)
+            created["anuj_attendance"] = added_anuj
+
+    return {"status": "seeded", "created": created}
 
 
 # Dependency for DB session

@@ -20,11 +20,17 @@ import {
   ChevronDown,
 } from "lucide-react"
 import {
-  LineChart,
-  Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
+  Tooltip,
+  Legend,
+  CartesianGrid,
   ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
   RadarChart,
   PolarGrid,
   PolarAngleAxis,
@@ -46,7 +52,7 @@ const lineChartData = [
 export default function Dashboard() {
   const [activeNav, setActiveNav] = useState("dashboard")
   const [isProfileOpen, setIsProfileOpen] = useState(false)
-  const { getStats, students, teachers, subjects } = useData()
+  const { getStats, students, teachers, subjects, timetable, attendance, seedAttendance } = useData()
   const stats = getStats()
 
   // Get user type from localStorage
@@ -80,6 +86,46 @@ export default function Dashboard() {
   }))
 
   const filteredSidebarItems = userType === "student" ? sidebarItems : [...sidebarItems, ...manageItems]
+
+  // Build chart data from today's timetable and attendance
+  const buildLineChartData = () => {
+    try {
+      const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+      const todayName = typeof window !== "undefined" ? dayNames[new Date().getDay()] : "Monday"
+      const todayISO = typeof window !== "undefined" ? new Date().toISOString().split("T")[0] : ""
+
+      const entriesToday = timetable.filter((t) => t.day === todayName)
+      if (!entriesToday || entriesToday.length === 0) return lineChartData
+
+      // Group by timeSlot
+      const grouped: Record<string, { present: number; absent: number }> = {}
+      entriesToday.forEach((entry) => {
+        const slot = entry.timeSlot
+        if (!grouped[slot]) grouped[slot] = { present: 0, absent: 0 }
+        const records = attendance.filter(
+          (r) => r.timetableEntryId === entry.id && (!todayISO || r.date === todayISO),
+        )
+        grouped[slot].present += records.filter((r) => r.status === "present").length
+        grouped[slot].absent += records.filter((r) => r.status === "absent").length
+      })
+
+      // Preserve time order by unique timeSlots order in entriesToday
+      const uniqueSlots = Array.from(new Set(entriesToday.map((e) => e.timeSlot)))
+      const data = uniqueSlots.map((slot) => {
+        const g = grouped[slot] || { present: 0, absent: 0 }
+        // Ensure integer counts
+        const presentCount = Number(g.present || 0)
+        const absentCount = Number(g.absent || 0)
+        return { time: slot, present: presentCount, absent: absentCount }
+      })
+
+      return data
+    } catch (e) {
+      return lineChartData
+    }
+  }
+
+  const computedLineChartData = buildLineChartData()
 
   const handleNavigation = (item: any) => {
     if (item.href) {
@@ -280,13 +326,72 @@ export default function Dashboard() {
                 <CardContent>
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={lineChartData}>
-                        <XAxis dataKey="time" axisLine={false} tickLine={false} className="text-xs" />
-                        <YAxis axisLine={false} tickLine={false} className="text-xs" />
-                        <Line type="monotone" dataKey="present" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
-                        <Line type="monotone" dataKey="absent" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
-                        <Line type="monotone" dataKey="attendance" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
-                      </LineChart>
+                      <BarChart data={computedLineChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="time" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        {/* Stacked bars: present (bottom) and absent (top) */}
+                        <Bar dataKey="present" stackId="a" fill="#3b82f6" />
+                        <Bar dataKey="absent" stackId="a" fill="#10b981" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-4 flex justify-end">
+                    <Button size="sm" onClick={() => seedAttendance(7)} variant="outline">
+                      Reseed 7-day data
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="ml-2"
+                      onClick={async () => {
+                        try {
+                          await fetch("http://127.0.0.1:8000/api/seed-demo-students", { method: "POST" })
+                          // reload so data-context picks up new students from backend
+                          window.location.reload()
+                        } catch (e) {
+                          alert("Failed to seed demo students — is the backend running?")
+                        }
+                      }}
+                      variant="outline"
+                    >
+                      Seed demo students
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Attendance Pie Chart */}
+            <div className="lg:col-span-2">
+              <Card className="bg-white">
+                <CardHeader className="pb-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-medium text-green-600">Attendance Breakdown</CardTitle>
+                    <span className="text-xs text-gray-500">Today</span>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-64 flex items-center justify-center">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[{ name: "Present", value: stats.totalPresent || 0 }, { name: "Absent", value: stats.totalAbsent || 0 }]}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={80}
+                          fill="#8884d8"
+                          label
+                        >
+                          <Cell key="present" fill="#3b82f6" />
+                          <Cell key="absent" fill="#ef4444" />
+                        </Pie>
+                        <Tooltip />
+                        <Legend verticalAlign="bottom" />
+                      </PieChart>
                     </ResponsiveContainer>
                   </div>
                 </CardContent>
