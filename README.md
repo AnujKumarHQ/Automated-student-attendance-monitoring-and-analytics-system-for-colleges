@@ -1,193 +1,216 @@
-Automated Student Attendance Monitoring and Analytics System
- 
-An advanced attendance tracking and analytics platform designed for colleges, built for the Smart India Hackathon. Features a Next.js frontend, FastAPI backend with SQLAlchemy, and experimental face recognition using InsightFace and OpenCV. Includes student/teacher dashboards, leave workflows, and demo data seeding for rapid development.
+# Automated Student Attendance Monitoring and Analytics System
 
-Warning: This is demo code with development conveniences. Review the Security & Production Considerations before deploying.
+An attendance tracking and analytics application built with a Next.js frontend and a FastAPI + SQLAlchemy backend. It includes face-recognition scaffolding, a demo data seeding mechanism, per-student dashboards, teacher/admin interfaces, leave/substitution workflows, and reporting tools.
 
+> NOTE: This repository contains demo code and development conveniences. See the "Security & Production Considerations" section before deploying.
 
-Table of Contents
+## Table of Contents
 
-Project Overview
-Features
-Architecture
-Quick Start (Development)
-Prerequisites
-Backend Setup
-Frontend Setup
+- Project overview
+- Features
+- Architecture
+- Quick start (development)
+  - Prerequisites
+  - Backend setup
+  - Frontend setup
+- API endpoints (summary)
+- Demo / seeding
+- Important implementation details
+  - Data model overview
+  - Timetable & attendance seeding
+  - Face recognition scaffold
+- Security & privacy notes
+- Recommended next steps
+- Troubleshooting
+- License
 
+## Project overview
 
-API Endpoints (Summary)
-Demo & Seeding
-Implementation Details
-Data Model Overview
-Timetable & Attendance Seeding
-Face Recognition Scaffold
+This project provides a full-stack attendance monitoring system targeted at colleges and institutions. It combines:
 
+- A Next.js + React frontend (app/ directory) providing user-facing pages for students, teachers, and admins.
+- A FastAPI backend (`backend/main.py`) using SQLAlchemy models and MySQL (via pymysql) for persistence.
+- Face recognition scaffolding (InsightFace, OpenCV) for automated attendance capture (experimental).
+- Demo data seeding and fallback localStorage-based state for local development.
 
-Security & Production Considerations
-Recommended Next Steps
-Troubleshooting
-Contributing
-License
+The codebase includes many features implemented for demonstration and rapid testing.
 
-Project Overview
-This project delivers a full-stack solution for automated attendance monitoring in colleges. It integrates:
+## Features
 
-A Next.js + TypeScript frontend (app/) for student, teacher, and admin interfaces.
-A FastAPI backend (backend/main.py) with SQLAlchemy and MySQL for data persistence.
-Experimental face recognition using InsightFace and OpenCV for automated attendance.
-Demo data seeding for rapid testing, with fallback to localStorage for offline development.
+- Student dashboard: per-student attendance metrics, today's schedule, subject-wise attendance with deterministic fallbacks.
+- Teacher dashboard: teacher management, leave requests, substitution auto-assignment, role-based UI controls.
+- Admin views: create/manage teachers/students/subjects; seed demo data endpoints.
+- Attendance recognition scaffold: endpoint receives a base64 image and attempts to match known student embeddings.
+- Weekly timetable editor (Report page) with attendance marking modal and camera integration.
+- Charts and analytics: stacked bar and pie charts for present/absent counts and more.
+- Demo-friendly behavior: seeded demo students (Anuj, Saksham, Rohain, Anirduh, Varun), deterministic attendance patterns for testing.
+- Toast notifications, helpful UI components, and graceful fallbacks when backend is unavailable.
 
-Designed for the Smart India Hackathon, it streamlines attendance tracking, analytics, and administrative workflows.
-Features
+## Architecture
 
-Student Dashboard: View personal attendance, today’s schedule, and subject-wise metrics with deterministic fallbacks.
-Teacher Dashboard: Manage classes, request leaves, auto-assign substitutions, and access role-based controls.
-Admin Interface: Create/manage teachers, students, subjects, and seed demo data.
-Face Recognition: Upload base64 images to match student embeddings and record attendance.
-Timetable Editor: Weekly schedule management with attendance marking and camera integration.
-Analytics: Visualizations (stacked bar/pie charts) for attendance trends.
-Demo Mode: Pre-seeded data (students: Anuj, Saksham, Rohain, Anirudh, Varun) with predictable attendance patterns.
-UI Enhancements: Toast notifications, responsive design, and graceful backend fallbacks.
+- Frontend: Next.js (app router), TypeScript/React, Tailwind CSS. Central client state and helpers live in `lib/data-context.tsx` which stores data in `localStorage` and optionally fetches from the backend.
+- Backend: FastAPI with SQLAlchemy models, designed to use MySQL (`DATABASE_URL` environment variable expected). Face recognition uses InsightFace + OpenCV (optional heavy native deps).
 
-Architecture
+## Quick start (development)
 
-Frontend: Next.js (App Router), TypeScript, React, Tailwind CSS. State management via lib/data-context.tsx with localStorage and backend sync.
-Backend: FastAPI, SQLAlchemy, MySQL (via pymysql). Optional face recognition with InsightFace + OpenCV.
-Data Storage: MySQL for persistent data; filesystem for face embeddings and attendance logs.
+### Prerequisites
+- Node.js (v16+ recommended)
+- pnpm or npm/yarn for frontend dependencies (this project uses pnpm lockfile)
+- Python 3.11+ (or at least 3.9+), pip
+- MySQL server (local) or alternative SQL DB compatible with SQLAlchemy
+- Optional (only if using face recognition): OpenCV, InsightFace, numpy, and supporting system libraries
 
-Quick Start (Development)
-Prerequisites
+### Backend setup
 
-Node.js: v16+ (v18 recommended)
-pnpm: v8+ (or npm/yarn; pnpm lockfile included)
-Python: 3.11+ (3.9+ compatible)
-MySQL: Local server or compatible SQL database
-Optional (Face Recognition): OpenCV, InsightFace, NumPy, system libraries (e.g., libpng, cmake)
+1. Create and activate a Python virtual environment. Example (Windows PowerShell):
 
-Backend Setup
-
-Create a Virtual Environment:
+```powershell
 python -m venv .venv
-.\venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
+```
 
+2. Install Python dependencies (create a `requirements.txt` as needed). Example packages used in the repo:
 
-Install Dependencies:Create a requirements.txt file:
-fastapi==0.115.0
-uvicorn==0.31.0
-sqlalchemy==2.0.35
-pymysql==1.1.1
-pydantic==2.9.2
-numpy==2.1.1
-opencv-python==4.10.0.84
-insightface==0.7.3
+- fastapi
+- uvicorn
+- sqlalchemy
+- pymysql
+- pydantic
+- numpy
+- opencv-python (optional)
+- insightface (optional)
 
-Install:
-pip install -r requirements.txt
+Install example:
 
+```powershell
+pip install fastapi uvicorn sqlalchemy pymysql pydantic numpy
+# Optional for face recognition (may require system libraries)
+pip install opencv-python insightface
+```
 
-Configure Database:Set the DATABASE_URL environment variable (replace with your credentials):
+3. Configure your database connection as an environment variable. The app previously had a default `DATABASE_URL` in code; do NOT use hardcoded credentials in production. Set an environment variable instead:
+
+```powershell
 $env:DATABASE_URL = "mysql+pymysql://appuser:securepassword@localhost/attendance_db"
+```
 
+4. Run the backend server from the `backend` directory:
 
-Run Backend:
+```powershell
 cd backend
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
 
-Access API at http://localhost:8000/docs.
+Notes:
+- InsightFace/OpenCV dependencies can be heavy and sometimes require native build tooling; if you don't need face recognition locally, skip installing them.
 
+### Frontend setup
 
-Frontend Setup
+1. From the repository root, install dependencies and run the Next.js app:
 
-Install Dependencies:
+```powershell
+# Using pnpm
 pnpm install
-# or: npm install
-
-
-Run Frontend:
 pnpm dev
-# or: npm run dev
 
-Open http://localhost:3000 and use demo login or seed backend data.
+# or using npm
+npm install
+npm run dev
+```
 
+2. Open `http://localhost:3000` and use the demo login or seed the backend via the provided endpoints.
 
-API Endpoints (Summary)
+## API endpoints (summary)
 
-Security Note: Many endpoints are unprotected and expose sensitive data (e.g., passwords). Secure before production.
+Note: many endpoints are currently unprotected and return full model rows including `password` fields — this is unsafe for production. See Security notes below.
 
+Important endpoints (backend/main.py):
 
-POST /api/students/register: Register a student.
-POST /api/students/{id}/register: Upload face images (base64).
-POST /api/attendance/recognize: Match face image and log attendance.
-CRUD Endpoints: /api/teachers/, /api/students/, /api/admins/, /api/subjects/, /api/attendance/.
-Leave Workflow: POST /api/leaves/, GET /api/leaves/, PUT /api/leaves/{id}/resolve, PUT /api/leaves/{id}/reject.
-Demo Seeding: POST /api/seed-demo, POST /api/seed-demo-students.
+- POST /api/students/register — register a student (creates DB record)
+- POST /api/students/{id}/register — upload face images (base64 array)
+- POST /api/attendance/recognize — recognize face image and optionally write an attendance record (uses filesystem storage for attendance)
+- Teachers CRUD: GET/POST /api/teachers/
+- Students: GET /api/students/
+- Admins CRUD: GET/POST /api/admins/
+- Subjects CRUD: GET/POST /api/subjects/
+- Attendance CRUD: GET/POST /api/attendance/
+- Leave workflow: POST /api/leaves/, GET /api/leaves/, PUT /api/leaves/{id}/resolve, PUT /api/leaves/{id}/reject
+- Demo seeding: POST /api/seed-demo, POST /api/seed-demo-students
 
-Demo & Seeding
+## Demo / seeding
 
-Endpoints:
-POST /api/seed-demo: Seeds teachers, students, subjects, and attendance.
-POST /api/seed-demo-students: Adds demo students (e.g., Anuj, Saksham).
+Two endpoints help populate demo data:
 
+- POST `/api/seed-demo` — seeds teachers, students (including Anuj with deterministic attendance), subjects, and attendance.
+- POST `/api/seed-demo-students` — ensures demo student records (Saksham, Rohain, Anirduh, Varun) exist.
 
-Frontend Fallback: lib/data-context.tsx uses localStorage if backend is unavailable.
+The frontend also includes localStorage fallbacks and will call `/api/students/` and seed endpoints when available.
 
-Implementation Details
-Data Model Overview
+## Important implementation details
 
-Entities: Teacher, Student, Admin (id, name, email, username, password), Subject, TimetableEntry, Attendance, LeaveRequestModel, SubstitutionModel.
-Relationships: Subjects linked to teachers; attendance tied to students/subjects.
+### Data model overview
 
-Timetable & Attendance Seeding
+Key models (in `backend/main.py` and mirrored in frontend types):
 
-Frontend seeds timetable in localStorage if no backend.
-Backend /api/seed-demo generates demo data with deterministic attendance for testing.
+- Teacher, Student, Admin — have `id`, `name`, `email`, `username`, `password` (plaintext in current code) and other fields.
+- Subject — name, code, teacher relationship.
+- TimetableEntry (frontend) — day, timeSlot, subjectId, teacherId, room, course.
+- Attendance — student_id, subject_id, class_time, timestamp, status, confidence.
+- LeaveRequestModel & SubstitutionModel — used for leave/substitution flows.
 
-Face Recognition Scaffold
+### Timetable & attendance seeding
 
-Uses InsightFace/OpenCV to extract/store embeddings (students/{id}/embeddings.npy).
-/api/attendance/recognize compares images and logs attendance to attendance/.
+- Frontend `lib/data-context.tsx` seeds default timetable entries in `localStorage` if no backend is available.
+- Backend `/api/seed-demo` creates demo subjects and seeds attendance (including deterministic records for Anuj).
 
-Security & Production Considerations
+### Face recognition scaffold
 
-Critical: This is demo code with significant security gaps. Address these before production:
+- The backend uses InsightFace and OpenCV to extract embeddings from provided images and saves embeddings per student under `students/{id}/embeddings.npy`.
+- Recognition endpoint compares an incoming embedding to stored embeddings and writes a JSON record to `attendance/` on a successful match.
 
+## Security & production considerations (important)
 
-Authentication: Add OAuth2/JWT and role-based access control (RBAC).
-Passwords: Hash passwords (bcrypt/argon2); never expose in API responses.
-Secrets: Use environment variables or a secret manager, not hardcoded credentials.
-File Uploads: Validate images, limit size, scan for malware, use secure storage (e.g., S3).
-Face Recognition: Require teacher authentication, add liveness checks.
-Demo Endpoints: Disable /api/seed-demo in production.
-Additional: Implement rate limiting, logging, and data retention policies.
+This repo contains multiple deliberate development conveniences and known security gaps. Before deploying to production, do not skip the following:
 
-Recommended Next Steps
+1. Implement server-side authentication + RBAC. Do not rely on client-side localStorage for role checks.
+2. Stop storing plaintext passwords. Use bcrypt/argon2 and never return password fields in API responses.
+3. Move secrets into environment variables or a secret manager. Rotate credentials.
+4. Harden file uploads: validate image content, limit size, use safe filenames, and scan content.
+5. Protect face recognition endpoint: require authenticated teacher requests and add liveness checks.
+6. Remove or protect all seeding/demo endpoints in production.
+7. Add rate limiting, logging, monitoring, and an audit trail for actions like attendance marking.
+8. Implement privacy safeguards and data retention policies for face data.
 
-Add authentication middleware (FastAPI + JWT).
-Hash passwords and sanitize API responses.
-Validate inputs with Pydantic and restrict exposed fields.
-Use secure storage (e.g., S3) for face embeddings.
-Write unit/integration tests for API and business logic.
-Set up CI/CD with linting and code scanning.
-Deploy to a staging environment with an API gateway.
+## Recommended next steps (developer roadmap)
 
-Troubleshooting
+1. Add authentication (OAuth2 / JWT or session-based) and implement RBAC middleware.
+2. Hash passwords and migrate existing user records.
+3. Sanitize all inputs, use Pydantic models for validation, and restrict returned fields.
+4. Secure file storage (S3 or secure uploads dir), scan uploads, and set quotas.
+5. Add tests (unit tests for business logic and integration tests for API endpoints).
+6. Add CI checks, linting, and a code scanning step.
+7. Consider deploying to a staging environment behind an API gateway (rate-limiting and WAF).
 
-Backend Fails (InsightFace/OpenCV): Skip these imports if not using face recognition.
-DB Connection Errors: Verify DATABASE_URL and database user privileges.
-Frontend Fails: Ensure pnpm install completed and backend is running at http://localhost:8000.
+## Troubleshooting
 
-Contributing
-Contributions are welcome! For major changes:
+- If the backend fails to start due to InsightFace or OpenCV, remove or guard those imports while developing without face recognition.
+- If DB connection fails, ensure `DATABASE_URL` is correctly set and the DB user has appropriate privileges. Do not use `root` credentials in production.
 
-Open an issue to discuss the change.
-Submit a pull request with clear descriptions.Focus Areas:
+## Contributing
 
+Contributions are welcome. For large changes, please open an issue describing the intended change, then a pull request. Focus areas that need immediate attention:
 
-Authentication and RBAC.
-Secure password handling.
-File upload validation.
-Logging and monitoring.
+- Authentication & authorization
+- Password hashing and secure credential handling
+- Upload validation and secure storage
+- Logging and monitoring
 
-License
-MIT License – see the LICENSE file for details.
+## License
+
+This project is provided as-is for demonstration. Add a license file before public distribution.
+
+---
+
+If you'd like, I can also:
+- Add an example `requirements.txt` and a `dev.Dockerfile`/`docker-compose` to simplify local setup.
+- Implement the immediate security fixes (redact passwords in API responses, move DB config to env vars, and gate seed endpoints). Which of these should I implement next?
