@@ -211,6 +211,3 @@ This project is provided as-is for demonstration. Add a license file before publ
 
 ---
 
-If you'd like, I can also:
-- Add an example `requirements.txt` and a `dev.Dockerfile`/`docker-compose` to simplify local setup.
-- Implement the immediate security fixes (redact passwords in API responses, move DB config to env vars, and gate seed endpoints). Which of these should I implement next?
